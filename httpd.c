@@ -19,7 +19,12 @@
 
 #define ISspace(x) isspace((int)(x))
 
+#define BUFSIZE 4096
+#define CONSIZE 20
+
 #define SERVER_STRING "Server: jdbhttpd/0.1.0\r\n"
+
+int fd_con[CONSIZE];
 
 void* accept_request(void*);
 void bad_request(int);
@@ -368,19 +373,97 @@ void runmultiprocess(int server_sock)
 
 }
 
+void runselect(int server_sock)
+{
+
+  int client_sock = -1;
+  char buf[BUFSIZE];
+  struct sockaddr_in client_name;
+  socklen_t client_name_len = sizeof(client_name);
+  int maxfd;
+  fd_set fds;
+  int i;
+  int ret;
+  maxfd = server_sock;
+  int currentcon = 0;
+
+  while(1)
+  {
+    FD_ZERO(&fds);
+    FD_SET(server_sock, &fds);
+    for(i = 0; i < CONSIZE; i++)
+    {
+      if(fd_con[i] != 0)
+        FD_SET(fd_con[i], &fds);
+    }
+    if((ret = select(maxfd+1, &fds, NULL, NULL, NULL)) < 0)
+      error_die("select error");
+
+    for (i = 0; i < currentcon; i++)
+    {
+      if(FD_ISSET(fd_con[i], &fds))
+      {
+        ret = recv(fd_con[i], buf, sizeof(buf), 0);
+        headers(fd_con[i]);
+        send(fd_con[i], "hello mingfei", 14, 0);
+        printf("HTTP/1.0 200 OK \n");     
+        close(fd_con[i]);   
+        FD_CLR(fd_con[i], &fds);   
+        fd_con[i] = 0;  
+        // if(ret <= 0)
+        // {
+        //   close(fd_con[i]);
+        //   FD_CLR(fd_con[i], &fds);
+        //   fd_con[i] = 0; 
+        // }
+        // else
+        // {
+        //   headers(fd_con[i]);
+        //   send(fd_con[i], "hello mingfei", 14, 0);
+        //   printf("HTTP/1.0 200 OK \n");            
+        // }
+      }
+    }
+    if(FD_ISSET(server_sock, &fds))
+    {
+      client_sock = accept(server_sock, (struct sockaddr *)&client_name, &client_name_len);
+      if(client_sock == -1)
+        error_die("accept");
+
+      if(currentcon <= CONSIZE)
+      {
+        fd_con[currentcon++] = client_sock;
+        printf("new connection client %d, %s : %d\n", currentcon, inet_ntoa(client_name.sin_addr), ntohs(client_name.sin_port));
+        if(client_sock > maxfd)
+          maxfd = client_sock;
+      }
+      else
+      {
+        printf("max connections arrive, exit\n");
+        close(client_sock);
+        exit(1);
+      }      
+    }
+  }
+  for (i = 0; i < CONSIZE; i++)
+  {
+    if(fd_con[i] != 0)
+      close(fd_con[i]);
+  }
+  return;
+}
+
 int main(void)
 {
  int server_sock = -1;
  u_short port = 8080;
- int client_sock = -1;
- struct sockaddr_in client_name;
- socklen_t client_name_len = sizeof(client_name);
- pthread_t newthread;
 
  server_sock = startup(&port);
  printf("httpd running on port %d\n", port);
 
- runmultithread(server_sock);
+ //runmultithread(server_sock);
+ runselect(server_sock);
+ //runmultiprocess(server_sock);
  close(server_sock);
 
  return(0);
