@@ -41,6 +41,19 @@ void unimplemented(int);
 void runmultiprocess(int);
 void runmultithread(int);
 void waitchild();
+int updateMaxfd(fd_set, int);
+
+int updateMaxfd(fd_set fds, int maxfd) {
+  int i;
+  int new_maxfd = 0;
+  for (i = 0; i <= maxfd; i++) {
+    if (FD_ISSET(i, &fds) && i > new_maxfd) {
+      new_maxfd = i;
+    }
+  }
+  return new_maxfd;
+}
+
 
 /**********************************************************************/
 /* A request has caused a call to accept() on the server port to
@@ -491,7 +504,7 @@ void runselect(int server_sock)
   {
     
     fds = allfds;   
-    
+    maxfd = updateMaxfd(fds, maxfd);
     if((ret = select(maxfd+1, &fds, NULL, NULL, NULL)) < 0)
       error_die("select error");
 
@@ -517,6 +530,7 @@ void runselect(int server_sock)
         {
         headers(i);
         send(i, "hello mingfei", 14, 0);
+        printf("HTTP/1.0 200 OK \n");      
         if(close(i) < 0)
           error_die("close error");
         FD_CLR(i, &allfds);         
