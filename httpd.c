@@ -266,10 +266,15 @@ int startup(u_short *port)
 {
  int httpd = 0;
  struct sockaddr_in name;
+ int one = 1;
 
  httpd = socket(PF_INET, SOCK_STREAM, 0);
  if (httpd == -1)
   error_die("socket");
+
+ if(setsockopt(httpd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0)
+  error_die("socket opt");
+
  memset(&name, 0, sizeof(name));
  name.sin_family = AF_INET;
  name.sin_port = htons(*port);
@@ -283,7 +288,7 @@ int startup(u_short *port)
    error_die("getsockname");
   *port = ntohs(name.sin_port);
  }
- if (listen(httpd, 5) < 0)
+ if (listen(httpd, 20) < 0)
   error_die("listen");
  return(httpd);
 }
@@ -373,7 +378,7 @@ void runmultiprocess(int server_sock)
 
 }
 
-void runselect(int server_sock)
+void runselect1(int server_sock)
 {
 
   int client_sock = -1;
@@ -381,49 +386,59 @@ void runselect(int server_sock)
   struct sockaddr_in client_name;
   socklen_t client_name_len = sizeof(client_name);
   int maxfd;
-  fd_set fds;
+  fd_set fds, allfds;
   int i;
   int ret;
   maxfd = server_sock;
   int currentcon = 0;
+  FD_ZERO(&allfds);
+  FD_ZERO(&fds);
+  FD_SET(server_sock, &allfds);
 
   while(1)
   {
-    FD_ZERO(&fds);
-    FD_SET(server_sock, &fds);
+    
+    fds = allfds;
+    currentcon = 0;
     for(i = 0; i < CONSIZE; i++)
     {
-      if(fd_con[i] != 0)
-        FD_SET(fd_con[i], &fds);
-    }
+      if(fd_con[i] != 0){
+        FD_SET(fd_con[i], &fds);  
+        if (fd_con[i] > maxfd)
+        {
+          maxfd = fd_con[i];
+        }
+        fd_con[currentcon++] = fd_con[i];
+      }
+    }    
+    
     if((ret = select(maxfd+1, &fds, NULL, NULL, NULL)) < 0)
       error_die("select error");
 
-    for (i = 0; i < currentcon; i++)
+    for (i = 0; i < CONSIZE; i++)
     {
       if(FD_ISSET(fd_con[i], &fds))
       {
-        ret = recv(fd_con[i], buf, sizeof(buf), 0);
-        headers(fd_con[i]);
-        send(fd_con[i], "hello mingfei", 14, 0);
-        printf("HTTP/1.0 200 OK \n");     
-        close(fd_con[i]);   
-        FD_CLR(fd_con[i], &fds);   
-        fd_con[i] = 0;  
-        // if(ret <= 0)
-        // {
-        //   close(fd_con[i]);
-        //   FD_CLR(fd_con[i], &fds);
-        //   fd_con[i] = 0; 
+        if((ret = recv(fd_con[i], buf, sizeof(buf), 0)) < 0)
+          error_die("recv error");
+        // else if(ret == 0){
+        //   fd_con[i] = 0;
+        //   FD_CLR(fd_con[i], &fds);   
+        //   close(fd_con[i]);   
         // }
-        // else
-        // {
-        //   headers(fd_con[i]);
-        //   send(fd_con[i], "hello mingfei", 14, 0);
-        //   printf("HTTP/1.0 200 OK \n");            
-        // }
+        else
+        {
+          headers(fd_con[i]);
+          send(fd_con[i], "hello mingfei", 14, 0);
+          printf("HTTP/1.0 200 OK \n");             
+          fd_con[i] = 0;
+          // FD_CLR(fd_con[i], &fds);   
+          if(close(fd_con[i]) < 0)
+            error_die("close error");             
+        }
       }
     }
+
     if(FD_ISSET(server_sock, &fds))
     {
       client_sock = accept(server_sock, (struct sockaddr *)&client_name, &client_name_len);
@@ -433,17 +448,19 @@ void runselect(int server_sock)
       if(currentcon <= CONSIZE)
       {
         fd_con[currentcon++] = client_sock;
+        // FD_SET(client_sock, &allfds);
         printf("new connection client %d, %s : %d\n", currentcon, inet_ntoa(client_name.sin_addr), ntohs(client_name.sin_port));
         if(client_sock > maxfd)
           maxfd = client_sock;
       }
       else
       {
-        printf("max connections arrive, exit\n");
+        printf("max connections arrive, exit\n"); 
         close(client_sock);
         exit(1);
       }      
     }
+
   }
   for (i = 0; i < CONSIZE; i++)
   {
@@ -452,6 +469,66 @@ void runselect(int server_sock)
   }
   return;
 }
+
+void runselect(int server_sock)
+{
+
+  int client_sock = -1;
+  char buf[BUFSIZE];
+  struct sockaddr_in client_name;
+  socklen_t client_name_len = sizeof(client_name);
+  int maxfd;
+  fd_set fds, allfds;
+  int i;
+  int ret;
+  maxfd = server_sock;
+  int currentcon = 0;
+  FD_ZERO(&allfds);
+  FD_ZERO(&fds);
+  FD_SET(server_sock, &allfds);
+
+  while(1)
+  {
+    
+    fds = allfds;   
+    
+    if((ret = select(maxfd+1, &fds, NULL, NULL, NULL)) < 0)
+      error_die("select error");
+
+    for(i = 0; i <= maxfd; i++)
+    {
+      if(!FD_ISSET(i, &fds))
+        continue;
+      if(i == server_sock)
+      {
+        client_sock = accept(server_sock, (struct sockaddr *)&client_name, &client_name_len);
+        if(client_sock == -1)
+          error_die("accept");
+        printf("new connection client %d, %s : %d\n", client_sock, inet_ntoa(client_name.sin_addr), ntohs(client_name.sin_port));
+        if(client_sock > maxfd)
+          maxfd = client_sock;
+        FD_SET(client_sock, &allfds);
+      }
+      else
+      {
+        if((ret = recv(i, buf, sizeof(buf), 0)) < 0)
+          error_die("recv error");
+        else
+        {
+        headers(i);
+        send(i, "hello mingfei", 14, 0);
+        if(close(i) < 0)
+          error_die("close error");
+        FD_CLR(i, &allfds);         
+        }
+      }
+    }
+  }
+
+  return;
+}
+
+
 
 int main(void)
 {
